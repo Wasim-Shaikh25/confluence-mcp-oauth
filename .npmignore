@@ -1,0 +1,31 @@
+# Dependencies & tooling
+node_modules/
+
+# Logs & caches
+*.log
+npm-debug.log*
+.npm/
+
+# Local secrets & session (never publish)
+.env
+.env.*
+cookies/
+
+# Git & IDE
+.git/
+.gitignore
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Tests & CI (if added)
+coverage/
+.nyc_output/
+
+# Pack artifacts
+*.tgz
+
+# Docs not shipped (README is allowlisted in package.json "files")
+# Optional: exclude large local notes
+*.local.md

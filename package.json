@@ -1,0 +1,49 @@
+{
+  "name": "@svasimahmed283/confluence-sso-mcp",
+  "version": "0.1.1",
+  "description": "Model Context Protocol (MCP) server for Confluence Data Center: PAT or browser SSO cookies for REST API access from Cursor and other MCP clients.",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "confluence",
+    "confluence-server",
+    "cursor",
+    "sso"
+  ],
+  "type": "module",
+  "bin": {
+    "confluence-sso-mcp": "./src/index.js"
+  },
+  "files": [
+    "src/**/*.js",
+    "scripts/**/*.mjs",
+    "README.md",
+    ".env.example"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/confluence-mcp-oauth/confluence-mcp-oauth.git"
+  },
+  "homepage": "https://github.com/confluence-mcp-oauth/confluence-mcp-oauth#readme",
+  "bugs": {
+    "url": "https://github.com/confluence-mcp-oauth/confluence-mcp-oauth/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "login": "node scripts/confluence-login.mjs",
+    "install-browser": "npx playwright install chromium",
+    "prepack": "node -e \"const fs=require('fs');const p='src/index.js';const t=fs.readFileSync(p,'utf8');if(!t.startsWith('#!/usr/bin/env node'))process.exit(1);\"",
+    "prepublishOnly": "node scripts/verify-pack-includes-src.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "node-fetch": "^3.3.2",
+    "playwright": "^1.43.0"
+  }
+}

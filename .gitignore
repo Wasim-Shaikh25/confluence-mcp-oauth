@@ -1,0 +1,7 @@
+node_modules/
+cookies/
+.env
+*.log
+*.tgz
+npx-test-err.txt
+npx-test-out.txt

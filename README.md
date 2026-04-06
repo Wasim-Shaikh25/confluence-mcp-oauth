@@ -226,6 +226,7 @@ Cookies are stored in **`cookies/session.json`** (gitignored).
 | **404 on REST** | Wrong base URL—try adding or removing **`/wiki`** in `CONFLUENCE_BASE_URL`. |
 | **Tools not listed** | Use **Agent**; open the project folder as workspace; check **Settings → MCP** shows the server **connected**. |
 | **`confluence_login` hangs or times out in UI** | Chromium may still be open—check the taskbar; or run **`npm run login`** in a terminal (up to **`CONFLUENCE_LOGIN_WAIT_SECONDS`**). |
+| **`ERR_MODULE_NOT_FOUND` for `src/auth.js` (or other `src/*.js`) after `npx`** | The installed package tarball was incomplete or cached. **Publish** a fixed version (e.g. bump patch), then run **`npx clear-npx-cache`** (npm 11+) or delete `%LocalAppData%\npm-cache\_npx` and use **`npx -y @scope/confluence-sso-mcp@latest`**. As a workaround, point **`mcp.json`** at a local clone with **`node`** + full path to **`src/index.js`**. |
 
 For broader Cursor MCP issues, see [Cursor forum: MCP tools](https://forum.cursor.com/search?q=mcp%20tools%20agent).
 
