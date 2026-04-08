@@ -6,11 +6,15 @@ import {
   ListToolsRequestSchema,
   CallToolRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import { loginWithSSO } from "./auth.js";
+import { loginWithSSO, loginToolResultText } from "./auth.js";
 import {
   searchContent,
   getPage,
   listSpaces,
+  listAllSpaces,
+  listSpacesWithCreateHints,
+  getSpace,
+  healthCheck,
   findPageByTitle,
   createPage,
   updatePage,
@@ -21,7 +25,7 @@ import {
 } from "./confluence.js";
 
 const server = new Server(
-  { name: "confluence-oauth-mcp", version: "0.1.1" },
+  { name: "confluence-oauth-mcp", version: "0.1.2" },
   { capabilities: { tools: {} } }
 );
 
@@ -30,7 +34,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: "confluence_login",
       description:
-        "SSO login in a browser; saves cookies for REST calls when PAT is not set or as fallback after PAT fails (401/403). Optional if CONFLUENCE_PAT is configured.",
+        "SSO login in a browser (Playwright); saves cookies for REST. If IdP redirects or automation block a session, use CONFLUENCE_PAT + PREFER_SSO_COOKIES=0 in mcp.json or delete the reported cookie file. Optional when PAT is configured and preferred.",
       inputSchema: { type: "object", properties: {} },
     },
     {
@@ -52,14 +56,76 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "confluence_list_spaces",
-      description: "List Confluence spaces (keys and names) for navigation.",
+      description:
+        "List one page of Confluence spaces (keys and names). Optional expand (e.g. permissions, operations). For every space without manual pagination, use confluence_list_all_spaces or confluence_spaces_create_hints.",
       inputSchema: {
         type: "object",
         properties: {
           limit: { type: "number", description: "Max spaces (default 25, max 100)." },
           start: { type: "number", description: "Pagination offset (default 0)." },
+          expand: {
+            type: "string",
+            description:
+              'Comma-separated API expand, e.g. "permissions,operations,description" (instance-dependent).',
+          },
         },
       },
+    },
+    {
+      name: "confluence_list_all_spaces",
+      description:
+        "List spaces across all pages (paginates GET /rest/api/space) until empty or maxSpaces. Optional expand. Use to enumerate every space key/name the current user can list.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          maxSpaces: {
+            type: "number",
+            description: "Stop after this many spaces (default 500, max 2000).",
+          },
+          expand: {
+            type: "string",
+            description:
+              'Comma-separated expand, e.g. "permissions,operations,description,homepage".',
+          },
+        },
+      },
+    },
+    {
+      name: "confluence_spaces_create_hints",
+      description:
+        "List spaces with best-effort canCreatePage hints from REST expand=permissions,operations (Cloud/DC shapes differ; null means unknown). Prefer confluence_create_page with spaceKey + parentPageId for a page under a parent in that space. Not a substitute for Confluence permission rules—use confluence_get_space or a test create if unsure.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          maxSpaces: {
+            type: "number",
+            description: "Max spaces to scan (default 500, max 2000).",
+          },
+        },
+      },
+    },
+    {
+      name: "confluence_get_space",
+      description:
+        "Get a single space by key with optional permission/operation details (helps before create_page).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          spaceKey: { type: "string", description: "Space key, e.g. TEAM" },
+          expand: {
+            type: "string",
+            description:
+              'Comma-separated expand (default: permissions,operations,description,homepage).',
+          },
+        },
+        required: ["spaceKey"],
+      },
+    },
+    {
+      name: "confluence_health_check",
+      description:
+        "Verify CONFLUENCE_BASE_URL matches the REST API host. Use when page IDs work in the browser but REST returns 404—often a second Confluence deployment or wrong base URL in MCP config.",
+      inputSchema: { type: "object", properties: {} },
     },
     {
       name: "confluence_find_page",
@@ -198,12 +264,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const args = request.params.arguments ?? {};
 
   if (name === "confluence_login") {
-    await loginWithSSO();
+    const result = await loginWithSSO();
     return {
       content: [
         {
           type: "text",
-          text: "SSO session saved. You can use search, read, and (if permitted) create/update tools.",
+          text: loginToolResultText(result),
         },
       ],
     };
@@ -222,7 +288,43 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   if (name === "confluence_list_spaces") {
     const limit = typeof args.limit === "number" ? args.limit : 25;
     const start = typeof args.start === "number" ? args.start : 0;
-    const data = await listSpaces(limit, start);
+    const expand = typeof args.expand === "string" ? args.expand : undefined;
+    const data = await listSpaces(limit, start, expand);
+    return {
+      content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
+    };
+  }
+
+  if (name === "confluence_list_all_spaces") {
+    const maxSpaces = typeof args.maxSpaces === "number" ? args.maxSpaces : 500;
+    const expand = typeof args.expand === "string" ? args.expand : undefined;
+    const data = await listAllSpaces(maxSpaces, expand);
+    return {
+      content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
+    };
+  }
+
+  if (name === "confluence_spaces_create_hints") {
+    const maxSpaces = typeof args.maxSpaces === "number" ? args.maxSpaces : 500;
+    const data = await listSpacesWithCreateHints(maxSpaces);
+    return {
+      content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
+    };
+  }
+
+  if (name === "confluence_get_space") {
+    const expand =
+      typeof args.expand === "string"
+        ? args.expand
+        : "permissions,operations,description,homepage";
+    const data = await getSpace(String(args.spaceKey), expand);
+    return {
+      content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
+    };
+  }
+
+  if (name === "confluence_health_check") {
+    const data = await healthCheck();
     return {
       content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
     };

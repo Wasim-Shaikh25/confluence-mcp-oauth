@@ -4,7 +4,7 @@ import path from "path";
 
 /**
  * Finds the mcpServers entry that launches a given entry script (e.g. this repo's src/index.js).
- * Cursor may name the server anything (confluence-sso, mywiki-sso, etc.); we match by path.
+ * Cursor may name the server anything; we match by path to the entry script, not by a fixed name.
  *
  * @param {string} entryScriptAbsolute - Absolute path to the MCP entry file (e.g. .../src/index.js)
  * @param {string[]} [legacyServerKeys] - If no path match, try these keys in order (optional env blocks).
@@ -12,7 +12,8 @@ import path from "path";
  */
 export function findMcpServerEnvForEntryScript(
   entryScriptAbsolute,
-  legacyServerKeys = ["confluence-sso", "mywiki-sso"]
+  legacyServerKeys = ["confluence-sso", "mywiki-sso"],
+  preferredKeyEnvVar = "CONFLUENCE_MCP_SERVER_KEY"
 ) {
   const markerNorm = path.normalize(path.resolve(entryScriptAbsolute)).toLowerCase();
 
@@ -39,13 +40,27 @@ export function findMcpServerEnvForEntryScript(
     }
   };
 
+  /** @type {{ key: string; env: Record<string, string> }[]} */
+  const pathMatches = [];
   for (const [serverKey, server] of Object.entries(servers)) {
     const args = server?.args;
     if (!Array.isArray(args)) continue;
     if (args.some(matchesPath)) {
       const env = server.env && typeof server.env === "object" ? server.env : {};
-      return { key: serverKey, env: /** @type {Record<string, string>} */ (env) };
+      pathMatches.push({ key: serverKey, env: /** @type {Record<string, string>} */ (env) });
     }
+  }
+
+  if (pathMatches.length === 1) {
+    return pathMatches[0];
+  }
+  if (pathMatches.length > 1) {
+    const want = process.env[preferredKeyEnvVar]?.trim();
+    if (want) {
+      const hit = pathMatches.find((m) => m.key === want);
+      if (hit) return hit;
+    }
+    return pathMatches[0];
   }
 
   for (const legacyKey of legacyServerKeys) {

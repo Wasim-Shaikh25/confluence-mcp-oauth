@@ -1,19 +1,40 @@
 import fs from "fs";
+import path from "node:path";
 import fetch from "node-fetch";
 import { CONFIG } from "./config.js";
+import { withCookieFileLockSync } from "./cookie-lock.js";
+import {
+  appendCqlContextToError,
+  buildGetSpacePath,
+  buildListSpacesPath,
+  healthCheckHosts,
+} from "./confluence-paths.js";
+import { summarizeSpaceForPageCreate } from "./confluence-space-hints.js";
+
+function readCookieFileSync(filePath) {
+  return withCookieFileLockSync(filePath, () => {
+    if (!fs.existsSync(filePath)) {
+      return null;
+    }
+    const raw = fs.readFileSync(filePath, "utf8");
+    const cookies = JSON.parse(raw);
+    if (!Array.isArray(cookies)) {
+      throw new Error(
+        `Invalid cookie file; delete ${filePath} and run confluence_login again.`
+      );
+    }
+    return cookies.map((c) => `${c.name}=${c.value}`).join("; ");
+  });
+}
 
 function loadCookieHeader() {
-  if (!fs.existsSync(CONFIG.COOKIE_FILE)) {
-    return null;
+  const primary = readCookieFileSync(CONFIG.COOKIE_FILE);
+  if (primary) return primary;
+  const legacy = path.join(CONFIG.PROJECT_ROOT, "cookies", "session.json");
+  if (legacy !== CONFIG.COOKIE_FILE && fs.existsSync(legacy)) {
+    return readCookieFileSync(legacy);
   }
-  const raw = fs.readFileSync(CONFIG.COOKIE_FILE, "utf8");
-  const cookies = JSON.parse(raw);
-  if (!Array.isArray(cookies)) {
-    throw new Error(
-      "Invalid cookie file; delete cookies/session.json and run confluence_login again."
-    );
-  }
-  return cookies.map((c) => `${c.name}=${c.value}`).join("; ");
+  return null;
 }
 
 const jsonHeaders = {
@@ -39,8 +60,9 @@ function shouldRetryWithCookie(status) {
 }
 
 /**
- * PAT first (if set), then SSO session cookies on 401/403.
- * If only cookies exist, uses cookies only.
+ * Default: if SSO cookies exist on disk, use **only** cookies (PAT is not sent). If cookies return 401/403, fail with a clear message (re-login or PREFER_SSO_COOKIES=0 + PAT).
+ * If PREFER_SSO_COOKIES=0: PAT first, then cookies on 401/403 (legacy).
+ * If no cookies: PAT if set, else error.
  */
 async function fetchWithAuth(url, init = {}) {
   const patHeaders = authHeadersForPat();
@@ -53,6 +75,18 @@ async function fetchWithAuth(url, init = {}) {
       ...extra,
     },
   });
+
+  if (CONFIG.preferSsoCookies && cookieHeaders) {
+    const res = await fetch(url, merge(cookieHeaders));
+    if (res.ok) return res;
+    if (shouldRetryWithCookie(res.status)) {
+      const text = await res.text();
+      throw new Error(
+        `Confluence HTTP ${res.status}: ${text.slice(0, 400)} SSO session expired, rejected, or never captured (browser automation/IdP). Run confluence_login again, or set CONFLUENCE_PAT + PREFER_SSO_COOKIES=0 in mcp.json, or delete the cookie file at ${CONFIG.COOKIE_FILE} to use PAT.`
+      );
+    }
+    return res;
+  }
 
   if (patHeaders) {
     const res = await fetch(url, merge(patHeaders));
@@ -71,10 +105,27 @@ async function fetchWithAuth(url, init = {}) {
   );
 }
 
+function hintForConfluenceStatus(status) {
+  if (status === 401) {
+    return " Unauthorized: SSO session expired, missing, or unusable — run confluence_login, or set CONFLUENCE_PAT and PREFER_SSO_COOKIES=0 (stale cookie file at cookies/session-*.json can block PAT until deleted).";
+  }
+  if (status === 403) {
+    return " Forbidden: you are signed in but lack permission for this space or action (e.g. create page). Try another space or request access.";
+  }
+  if (status === 404) {
+    return " Not found: wrong CONFLUENCE_BASE_URL/instance, missing content ID, or no browse permission.";
+  }
+  if (status >= 500) {
+    return " Server error: invalid CQL, Confluence fault, or proxy issue—check the query and instance logs.";
+  }
+  return "";
+}
+
 async function parseResponse(res) {
   const text = await res.text();
   if (!res.ok) {
-    throw new Error(`Confluence HTTP ${res.status}: ${text.slice(0, 800)}`);
+    const hint = hintForConfluenceStatus(res.status);
+    throw new Error(`Confluence HTTP ${res.status}: ${text.slice(0, 800)}${hint}`);
   }
   if (!text || !text.trim()) {
     return null;
@@ -114,7 +165,8 @@ export async function requestBinary(pathAndQuery) {
   });
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`Confluence HTTP ${res.status}: ${text.slice(0, 800)}`);
+    const hint = hintForConfluenceStatus(res.status);
+    throw new Error(`Confluence HTTP ${res.status}: ${text.slice(0, 800)}${hint}`);
   }
   const len = res.headers.get("content-length");
   if (len && Number(len) > CONFIG.maxAttachmentBytes) {
@@ -138,9 +190,16 @@ export async function searchContent(cql, limit = 25, start = 0) {
   const cqlParam = encodeURIComponent(cql);
   const lim = Number.isFinite(limit) ? Math.min(Math.max(1, limit), 100) : 25;
   const st = Number.isFinite(start) ? Math.max(0, start) : 0;
-  return requestJson(
-    `/rest/api/content/search?cql=${cqlParam}&limit=${lim}&start=${st}`
-  );
+  try {
+    return await requestJson(
+      `/rest/api/content/search?cql=${cqlParam}&limit=${lim}&start=${st}`
+    );
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    const wrapped = appendCqlContextToError(msg, cql);
+    if (wrapped !== msg) throw new Error(wrapped);
+    throw e;
+  }
 }
 
 export async function getPage(pageId, expand = "body.storage,version,space") {
@@ -149,11 +208,92 @@ export async function getPage(pageId, expand = "body.storage,version,space") {
   return requestJson(`/rest/api/content/${id}?expand=${exp}`);
 }
 
-/** List spaces (browse / pick a space key). */
-export async function listSpaces(limit = 25, start = 0) {
-  const lim = Number.isFinite(limit) ? Math.min(Math.max(1, limit), 100) : 25;
-  const st = Number.isFinite(start) ? Math.max(0, start) : 0;
-  return requestJson(`/rest/api/space?limit=${lim}&start=${st}`);
+/**
+ * List spaces (browse / pick a space key).
+ * @param {number} limit
+ * @param {number} start
+ * @param {string} [expand] e.g. "permissions,operations,description,icon" — helps see create/browse rights where supported
+ */
+export async function listSpaces(limit = 25, start = 0, expand) {
+  return requestJson(buildListSpacesPath(limit, start, expand));
+}
+
+const LIST_SPACES_PAGE = 100;
+
+/**
+ * Paginate GET /rest/api/space until no more results or maxSpaces reached.
+ * @param {number} [maxSpaces]
+ * @param {string} [expand]
+ */
+export async function listAllSpaces(maxSpaces = 500, expand) {
+  const cap = Math.min(Math.max(1, maxSpaces), 2000);
+  const out = [];
+  let start = 0;
+  while (out.length < cap) {
+    const pageSize = Math.min(LIST_SPACES_PAGE, cap - out.length);
+    const data = await listSpaces(pageSize, start, expand);
+    const results = data?.results ?? [];
+    if (results.length === 0) break;
+    for (const sp of results) {
+      out.push(sp);
+      if (out.length >= cap) break;
+    }
+    if (out.length >= cap) break;
+    if (results.length < pageSize) break;
+    start += results.length;
+  }
+  return {
+    totalFetched: out.length,
+    truncated: out.length >= cap,
+    spaces: out,
+  };
+}
+
+/**
+ * List all spaces with expand, then add best-effort "can create page?" hints per space.
+ * @param {number} [maxSpaces]
+ */
+export async function listSpacesWithCreateHints(maxSpaces = 500) {
+  const expand = "permissions,operations,description,homepage";
+  const { spaces, totalFetched, truncated } = await listAllSpaces(maxSpaces, expand);
+  const hints = spaces.map((sp) => summarizeSpaceForPageCreate(sp));
+  const likelyYes = hints.filter((h) => h.canCreatePage === true).length;
+  const unknown = hints.filter((h) => h.canCreatePage === null).length;
+  return {
+    note:
+      "canCreatePage is inferred from REST expand=permissions,operations when your site returns them. null means unknown — use confluence_get_space for one space or try confluence_create_page with a test title.",
+    totalFetched,
+    truncated,
+    summary: { likelyCanCreatePage: likelyYes, unknown },
+    hints,
+  };
+}
+
+/**
+ * Get one space by key (optionally expanded with permissions / operations).
+ * @param {string} spaceKey
+ * @param {string} [expand]
+ */
+export async function getSpace(spaceKey, expand = "permissions,operations,description,homepage") {
+  return requestJson(buildGetSpacePath(spaceKey, expand));
+}
+
+/**
+ * Verify CONFLUENCE_BASE_URL matches the REST API host (catches pointing MCP at the wrong Confluence instance).
+ */
+export async function healthCheck() {
+  const data = await requestJson(`/rest/api/space?limit=1`);
+  const first = data?.results?.[0];
+  const self = first?._links?.self || first?.self || "";
+  const hosts = healthCheckHosts(CONFIG.CONFLUENCE_BASE_URL, self);
+  return {
+    configuredBaseUrl: CONFIG.CONFLUENCE_BASE_URL,
+    configuredHost: hosts.configuredHost,
+    sampleContentSelfLink: self || null,
+    responseHost: hosts.responseHost,
+    hostMatches: hosts.hostMatches,
+    hint: hosts.hint,
+  };
 }
 
 /** Find a page by space key + exact title (read helper). */

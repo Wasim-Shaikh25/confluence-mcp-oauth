@@ -1,11 +1,13 @@
 {
   "name": "@svasimahmed283/confluence-sso-mcp",
-  "version": "0.1.1",
-  "description": "Model Context Protocol (MCP) server for Confluence Data Center: PAT or browser SSO cookies for REST API access from Cursor and other MCP clients.",
+  "version": "0.1.3",
+  "description": "Model Context Protocol (MCP) server for Atlassian Confluence: PAT or browser SSO cookies for REST API access—works with any reachable site you configure (Cloud or Data Center).",
   "keywords": [
     "mcp",
     "model-context-protocol",
+    "atlassian",
     "confluence",
+    "confluence-cloud",
     "confluence-server",
     "cursor",
     "sso"
@@ -15,8 +17,18 @@
     "confluence-sso-mcp": "./src/index.js"
   },
   "files": [
-    "src/**/*.js",
-    "scripts/**/*.mjs",
+    "src/index.js",
+    "src/auth.js",
+    "src/config.js",
+    "src/confluence.js",
+    "src/confluence-space-hints.js",
+    "src/sso-login-messages.js",
+    "src/confluence-paths.js",
+    "src/cookie-lock.js",
+    "src/session-path.js",
+    "tests/confluence-features.test.js",
+    "src/mcp-server-discovery.js",
+    "scripts/confluence-login.mjs",
     "README.md",
     ".env.example"
   ],
@@ -37,6 +49,8 @@
   "scripts": {
     "start": "node src/index.js",
     "login": "node scripts/confluence-login.mjs",
+    "test": "node --test tests/",
+    "validate": "node scripts/validate.mjs",
     "install-browser": "npx playwright install chromium",
     "prepack": "node -e \"const fs=require('fs');const p='src/index.js';const t=fs.readFileSync(p,'utf8');if(!t.startsWith('#!/usr/bin/env node'))process.exit(1);\"",
     "prepublishOnly": "node scripts/verify-pack-includes-src.mjs"
