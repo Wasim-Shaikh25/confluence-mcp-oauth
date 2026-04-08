@@ -4,6 +4,16 @@ A **[Model Context Protocol (MCP)](https://modelcontextprotocol.io/)** server fo
 
 ---
 
+## See also (sibling projects)
+
+| Project | Purpose |
+|---------|---------|
+| **Jira MCP** | [jira-mcp-auth](https://github.com/Wasim-Shaikh25/jira-mcp-auth) — Jira REST + optional SSO (`@svasimahmed283/jira-mcp-oauth` on npm). Same PAT/cookie patterns as this server. |
+| **GitHub Enterprise launcher** | [mcp-github-enterprise-launcher](https://github.com/Wasim-Shaikh25/mcp-github-enterprise-launcher) — npm stdio wrapper for a `github-mcp-server` binary. |
+| **SonarQube launcher** | [mcp-sonarqube-launcher](https://github.com/Wasim-Shaikh25/mcp-sonarqube-launcher) — npm stdio wrapper for a SonarQube MCP JAR. |
+
+---
+
 ## What this project does
 
 Teams often use **SSO** (SAML, OIDC, etc.) or strict API policies. This server is **not tied to one vendor or tenant**: you set **`CONFLUENCE_BASE_URL`** to your environment.
@@ -260,6 +270,8 @@ Cookies are stored in **`cookies/session.json`** (gitignored).
 | **Browser closes right after opening** | The session probe no longer treats **200 HTML** (after redirects) as “logged in”. Update this package; if it still happens, use **PAT** + **`PREFER_SSO_COOKIES=0`**. |
 | **`Execution context was destroyed` / navigation** | During SSO, **`page.evaluate`** can throw while the page redirects; the login loop now **retries** instead of failing the tool. If login still fails, use **PAT** + **`PREFER_SSO_COOKIES=0`**. |
 | **`ERR_MODULE_NOT_FOUND` for `src/auth.js` (or other `src/*.js`) after `npx`** | The tarball on npm was incomplete or npx cached a bad extract. **Publish** the latest patch (package `files` lists every `src/*.js` explicitly), then **clear npx cache**: delete `%LocalAppData%\npm-cache\_npx` (or run `npx clear-npx-cache` on npm 11+). Pin a version in **`mcp.json`**, e.g. **`"args": ["-y", "@your-scope/confluence-sso-mcp@x.y.z"]`**. Workaround: run from a **git clone** with **`node`** + full path to **`src/index.js`**. |
+| **`ENOENT` on `cookies/*.lock`** | Create a **`cookies/`** folder next to the installed **`src/`** if the lock file cannot be created (Windows `npx` cache). Prefer **`node path/to/clone/src/index.js`** with local **`npm install`**. |
+| **`TAR_ENTRY_ERROR EPERM` / `*.DELETE.*` under `_npx`** | Antivirus or file locks on **`%LocalAppData%\npm-cache`** can corrupt installs. Exclude that path from real-time scanning, or use a **local clone** + **`node`** instead of **`npx`**. |
 
 For broader Cursor MCP issues, see [Cursor forum: MCP tools](https://forum.cursor.com/search?q=mcp%20tools%20agent).
 

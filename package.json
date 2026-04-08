@@ -34,11 +34,11 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/confluence-mcp-oauth/confluence-mcp-oauth.git"
+    "url": "git+https://github.com/Wasim-Shaikh25/confluence-mcp-oauth.git"
   },
-  "homepage": "https://github.com/confluence-mcp-oauth/confluence-mcp-oauth#readme",
+  "homepage": "https://github.com/Wasim-Shaikh25/confluence-mcp-oauth#readme",
   "bugs": {
-    "url": "https://github.com/confluence-mcp-oauth/confluence-mcp-oauth/issues"
+    "url": "https://github.com/Wasim-Shaikh25/confluence-mcp-oauth/issues"
   },
   "publishConfig": {
     "access": "public"
