@@ -1,7 +1,25 @@
 import fs from "fs";
 import path from "node:path";
 import fetch from "node-fetch";
+import { createTwoFilesPatch } from "diff";
 import { CONFIG } from "./config.js";
+
+export function enforceAllowlistOnSpaceKey(spaceKey) {
+  const allowed = CONFIG.allowedSpaceKeys;
+  if (!allowed || !spaceKey) return;
+  const k = String(spaceKey).toUpperCase();
+  if (!allowed.has(k)) {
+    throw new Error(
+      `Operation blocked: space "${spaceKey}" is not in CONFLUENCE_ALLOWED_SPACE_KEYS (${[...allowed].join(", ")}).`
+    );
+  }
+}
+
+function enforceAllowlistOnPageJson(data) {
+  if (!data || typeof data !== "object") return;
+  const sk = data.space?.key;
+  if (sk) enforceAllowlistOnSpaceKey(sk);
+}
 import { withCookieFileLockSync } from "./cookie-lock.js";
 import {
   appendCqlContextToError,
@@ -105,6 +123,31 @@ async function fetchWithAuth(url, init = {}) {
   );
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Retry on 429 / 502 / 503 with Retry-After or exponential backoff.
+ */
+async function fetchWithRetry(url, init) {
+  let res;
+  for (let attempt = 0; attempt <= CONFIG.httpMaxRetries; attempt++) {
+    res = await fetchWithAuth(url, init);
+    const s = res.status;
+    if (s !== 429 && s !== 503 && s !== 502) return res;
+    if (attempt >= CONFIG.httpMaxRetries) return res;
+    const ra = parseInt(res.headers.get("retry-after") || "0", 10);
+    const backoff = CONFIG.httpRetryBaseMs * 2 ** attempt;
+    const waitMs = Math.min(
+      30_000,
+      Number.isFinite(ra) && ra > 0 ? ra * 1000 : backoff
+    );
+    await sleep(waitMs);
+  }
+  return res;
+}
+
 function hintForConfluenceStatus(status) {
   if (status === 401) {
     return " Unauthorized: SSO session expired, missing, or unusable — run confluence_login, or set CONFLUENCE_PAT and PREFER_SSO_COOKIES=0 (stale cookie file at cookies/session-*.json can block PAT until deleted).";
@@ -140,7 +183,7 @@ async function parseResponse(res) {
 /** GET JSON */
 export async function requestJson(pathAndQuery) {
   const url = `${CONFIG.CONFLUENCE_BASE_URL}${pathAndQuery}`;
-  const res = await fetchWithAuth(url, {
+  const res = await fetchWithRetry(url, {
     headers: { ...jsonHeaders },
   });
   return parseResponse(res);
@@ -149,10 +192,22 @@ export async function requestJson(pathAndQuery) {
 /** POST / PUT JSON */
 async function requestJsonWithBody(method, pathAndQuery, body) {
   const url = `${CONFIG.CONFLUENCE_BASE_URL}${pathAndQuery}`;
-  const res = await fetchWithAuth(url, {
+  const init = {
     method,
     headers: { ...jsonHeaders },
-    body: JSON.stringify(body),
+  };
+  if (body !== undefined) {
+    init.body = JSON.stringify(body);
+  }
+  const res = await fetchWithRetry(url, init);
+  return parseResponse(res);
+}
+
+async function requestJsonDelete(pathAndQuery) {
+  const url = `${CONFIG.CONFLUENCE_BASE_URL}${pathAndQuery}`;
+  const res = await fetchWithRetry(url, {
+    method: "DELETE",
+    headers: { ...jsonHeaders },
   });
   return parseResponse(res);
 }
@@ -160,7 +215,7 @@ async function requestJsonWithBody(method, pathAndQuery, body) {
 /** GET binary (attachments). Respects CONFLUENCE_MAX_ATTACHMENT_BYTES. */
 export async function requestBinary(pathAndQuery) {
   const url = `${CONFIG.CONFLUENCE_BASE_URL}${pathAndQuery}`;
-  const res = await fetchWithAuth(url, {
+  const res = await fetchWithRetry(url, {
     headers: { Accept: "*/*" },
   });
   if (!res.ok) {
@@ -190,8 +245,9 @@ export async function searchContent(cql, limit = 25, start = 0) {
   const cqlParam = encodeURIComponent(cql);
   const lim = Number.isFinite(limit) ? Math.min(Math.max(1, limit), 100) : 25;
   const st = Number.isFinite(start) ? Math.max(0, start) : 0;
+  let data;
   try {
-    return await requestJson(
+    data = await requestJson(
       `/rest/api/content/search?cql=${cqlParam}&limit=${lim}&start=${st}`
     );
   } catch (e) {
@@ -200,12 +256,33 @@ export async function searchContent(cql, limit = 25, start = 0) {
     if (wrapped !== msg) throw new Error(wrapped);
     throw e;
   }
+  if (CONFIG.allowedSpaceKeys && Array.isArray(data?.results)) {
+    const allowed = CONFIG.allowedSpaceKeys;
+    const filtered = data.results.filter((r) => {
+      const sk = r.space?.key;
+      return sk && allowed.has(String(sk).toUpperCase());
+    });
+    return {
+      ...data,
+      results: filtered,
+      size: filtered.length,
+      _mcpAllowlistFiltered: true,
+    };
+  }
+  return data;
 }
 
 export async function getPage(pageId, expand = "body.storage,version,space") {
   const id = encodeURIComponent(pageId);
   const exp = encodeURIComponent(expand);
-  return requestJson(`/rest/api/content/${id}?expand=${exp}`);
+  const data = await requestJson(`/rest/api/content/${id}?expand=${exp}`);
+  enforceAllowlistOnPageJson(data);
+  return data;
+}
+
+/** Page metadata plus ancestor chain (expand=ancestors). */
+export async function getPageAncestors(pageId) {
+  return getPage(pageId, "ancestors,version,space,title");
 }
 
 /**
@@ -215,7 +292,15 @@ export async function getPage(pageId, expand = "body.storage,version,space") {
  * @param {string} [expand] e.g. "permissions,operations,description,icon" — helps see create/browse rights where supported
  */
 export async function listSpaces(limit = 25, start = 0, expand) {
-  return requestJson(buildListSpacesPath(limit, start, expand));
+  const data = await requestJson(buildListSpacesPath(limit, start, expand));
+  if (CONFIG.allowedSpaceKeys && Array.isArray(data?.results)) {
+    const allowed = CONFIG.allowedSpaceKeys;
+    const filtered = data.results.filter((sp) =>
+      allowed.has(String(sp.key || "").toUpperCase())
+    );
+    return { ...data, results: filtered, size: filtered.length, _mcpAllowlistFiltered: true };
+  }
+  return data;
 }
 
 const LIST_SPACES_PAGE = 100;
@@ -275,6 +360,7 @@ export async function listSpacesWithCreateHints(maxSpaces = 500) {
  * @param {string} [expand]
  */
 export async function getSpace(spaceKey, expand = "permissions,operations,description,homepage") {
+  enforceAllowlistOnSpaceKey(spaceKey);
   return requestJson(buildGetSpacePath(spaceKey, expand));
 }
 
@@ -309,6 +395,9 @@ export async function findPageByTitle(spaceKey, title) {
  * @param {number} [start]
  */
 export async function listAttachments(pageId, limit = 50, start = 0) {
+  if (CONFIG.allowedSpaceKeys) {
+    await getPage(pageId, "space");
+  }
   const id = encodeURIComponent(pageId);
   const lim = Number.isFinite(limit) ? Math.min(Math.max(1, limit), 100) : 50;
   const st = Number.isFinite(start) ? Math.max(0, start) : 0;
@@ -438,12 +527,294 @@ export function extractImageReferencesFromStorage(storageXml) {
   return refs;
 }
 
+function escCqlString(s) {
+  return String(s).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
+/** Named CQL templates for `confluence_search_preset`. */
+export const CQL_SEARCH_PRESETS = {
+  recent_pages: {
+    description: "Pages ordered by last modified (newest first).",
+    build: () => "type = page order by lastModified desc",
+  },
+  pages_in_space: {
+    description: "Pages in a single space (requires spaceKey).",
+    build: (spaceKey) => {
+      if (!spaceKey) throw new Error("spaceKey is required for pages_in_space");
+      return `type = page AND space = "${escCqlString(spaceKey)}" order by title`;
+    },
+  },
+  stale_pages_90d: {
+    description: "Pages not modified in the last 90 days.",
+    build: (spaceKey) => {
+      const base = `type = page AND lastModified < now("-90d")`;
+      return spaceKey
+        ? `${base} AND space = "${escCqlString(spaceKey)}" order by lastModified`
+        : `${base} order by lastModified`;
+    },
+  },
+  pages_i_contributed: {
+    description: "Pages where current user is contributor (Cloud/DC dependent).",
+    build: () => "type = page AND contributor = currentUser() order by lastModified desc",
+  },
+};
+
+export function listCqlPresetKeys() {
+  return Object.entries(CQL_SEARCH_PRESETS).map(([key, v]) => ({
+    key,
+    description: v.description,
+  }));
+}
+
+export async function searchWithPreset(presetKey, { spaceKey, limit = 25, start = 0 } = {}) {
+  const preset = CQL_SEARCH_PRESETS[presetKey];
+  if (!preset) {
+    const keys = Object.keys(CQL_SEARCH_PRESETS).join(", ");
+    throw new Error(`Unknown preset "${presetKey}". Known: ${keys}`);
+  }
+  const cql = preset.build(spaceKey);
+  return searchContent(cql, limit, start);
+}
+
+/**
+ * Outbound links from storage: Confluence `ri:page`, `ri:blog-post`, space refs, and `ri:url`.
+ */
+export function extractOutboundLinksFromStorage(storageXml) {
+  const out = [];
+  if (!storageXml || typeof storageXml !== "string") return out;
+
+  const pageTags = storageXml.match(/<ri:page\b[^>]*\/?>/gi) ?? [];
+  for (const block of pageTags) {
+    const idM = /ri:content-id="([^"]+)"/.exec(block);
+    const skM = /ri:space-key="([^"]+)"/.exec(block);
+    const titleM = /ri:content-title="([^"]+)"/.exec(block);
+    out.push({
+      kind: "page",
+      contentId: idM ? idM[1] : undefined,
+      spaceKey: skM ? skM[1] : undefined,
+      title: titleM ? titleM[1] : undefined,
+    });
+  }
+
+  const urlRe = /<ri:url\b[^>]*?ri:value="([^"]+)"/gi;
+  let um;
+  while ((um = urlRe.exec(storageXml)) !== null) {
+    out.push({ kind: "url", url: um[1] });
+  }
+  return out;
+}
+
+const DIAGRAM_FILE_RE = /\.(drawio|dio|gliffy|vsdx?|puml|plantuml|mmd|mermaid)$/i;
+
+export async function listDiagramLikeAttachments(pageId) {
+  const data = await listAttachments(pageId, 100, 0);
+  const results = data?.results ?? [];
+  const hits = results.filter((r) => DIAGRAM_FILE_RE.test(r.title || ""));
+  return { pageId, count: hits.length, attachments: hits };
+}
+
+export async function listChildPages(pageId, limit = 25, start = 0, expand = "version") {
+  if (CONFIG.allowedSpaceKeys) {
+    await getPage(pageId, "space");
+  }
+  const id = encodeURIComponent(pageId);
+  const lim = Number.isFinite(limit) ? Math.min(Math.max(1, limit), 100) : 25;
+  const st = Number.isFinite(start) ? Math.max(0, start) : 0;
+  const exp = encodeURIComponent(expand);
+  const data = await requestJson(
+    `/rest/api/content/${id}/child/page?limit=${lim}&start=${st}&expand=${exp}`
+  );
+  if (CONFIG.allowedSpaceKeys && Array.isArray(data?.results)) {
+    const allowed = CONFIG.allowedSpaceKeys;
+    const filtered = data.results.filter((r) =>
+      allowed.has(String(r.space?.key || "").toUpperCase())
+    );
+    return { ...data, results: filtered, size: filtered.length };
+  }
+  return data;
+}
+
+export async function listPageComments(pageId, limit = 25, start = 0) {
+  if (CONFIG.allowedSpaceKeys) {
+    await getPage(pageId, "space");
+  }
+  const id = encodeURIComponent(pageId);
+  const lim = Number.isFinite(limit) ? Math.min(Math.max(1, limit), 100) : 25;
+  const st = Number.isFinite(start) ? Math.max(0, start) : 0;
+  const exp = encodeURIComponent("body.view,version,history");
+  return requestJson(
+    `/rest/api/content/${id}/child/comment?limit=${lim}&start=${st}&expand=${exp}`
+  );
+}
+
+export async function listPageLabels(pageId) {
+  if (CONFIG.allowedSpaceKeys) {
+    await getPage(pageId, "space");
+  }
+  const id = encodeURIComponent(pageId);
+  return requestJson(`/rest/api/content/${id}/label`);
+}
+
+export async function addPageLabel(pageId, labelName) {
+  if (CONFIG.allowedSpaceKeys) {
+    await getPage(pageId, "space");
+  }
+  const id = encodeURIComponent(pageId);
+  const name = String(labelName).trim();
+  if (!name) throw new Error("labelName is required");
+  const body = [{ prefix: "global", name }];
+  return requestJsonWithBody("POST", `/rest/api/content/${id}/label`, body);
+}
+
+export async function removePageLabel(pageId, labelName) {
+  if (CONFIG.allowedSpaceKeys) {
+    await getPage(pageId, "space");
+  }
+  const id = encodeURIComponent(pageId);
+  const name = encodeURIComponent(String(labelName).trim());
+  return requestJsonDelete(
+    `/rest/api/content/${id}/label?name=${name}&prefix=global`
+  );
+}
+
+export async function listPageVersions(pageId, limit = 50) {
+  if (CONFIG.allowedSpaceKeys) {
+    await getPage(pageId, "space");
+  }
+  const id = encodeURIComponent(pageId);
+  const lim = Number.isFinite(limit) ? Math.min(Math.max(1, limit), 200) : 50;
+  return requestJson(`/rest/api/content/${id}/version?limit=${lim}`);
+}
+
+export async function getPageStorageAtVersion(pageId, version, expand = "body.storage,version,space") {
+  const id = encodeURIComponent(pageId);
+  const v = encodeURIComponent(String(version));
+  const exp = encodeURIComponent(expand);
+  const data = await requestJson(`/rest/api/content/${id}?expand=${exp}&version=${v}`);
+  enforceAllowlistOnPageJson(data);
+  return data;
+}
+
+export async function diffPageStorageVersions(pageId, versionA, versionB) {
+  const a = await getPageStorageAtVersion(pageId, versionA, "body.storage,version");
+  const b = await getPageStorageAtVersion(pageId, versionB, "body.storage,version");
+  const left = a?.body?.storage?.value ?? "";
+  const right = b?.body?.storage?.value ?? "";
+  const patch = createTwoFilesPatch(
+    `v${versionA}`,
+    `v${versionB}`,
+    left,
+    right,
+    "",
+    ""
+  );
+  return {
+    pageId: String(pageId),
+    title: a?.title ?? b?.title,
+    versionA: Number(versionA),
+    versionB: Number(versionB),
+    patchChars: patch.length,
+    patch: patch.slice(0, 200_000),
+    truncated: patch.length > 200_000,
+  };
+}
+
+export async function getPagesBatch(pageIds, expand = "body.storage,version,space") {
+  const ids = Array.isArray(pageIds) ? pageIds.map(String) : [];
+  if (!ids.length) return { results: [] };
+  if (ids.length > 20) {
+    throw new Error("getPagesBatch supports at most 20 page IDs per call.");
+  }
+  const results = [];
+  for (const id of ids) {
+    try {
+      results.push({ pageId: id, ok: true, page: await getPage(id, expand) });
+    } catch (e) {
+      results.push({
+        pageId: id,
+        ok: false,
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }
+  return { count: results.length, results };
+}
+
+/**
+ * Optional vision summary for an image attachment (OpenAI-compatible chat API).
+ */
+export async function describeAttachmentWithVision(pageId, filename, instructions) {
+  const key = CONFIG.visionApiKey;
+  if (!key) {
+    throw new Error(
+      "Set CONFLUENCE_VISION_API_KEY or OPENAI_API_KEY to use confluence_describe_attachment."
+    );
+  }
+  if (CONFIG.allowedSpaceKeys) {
+    await getPage(String(pageId), "space");
+  }
+  const { buffer, contentType } = await fetchAttachmentByFilename(String(pageId), String(filename));
+  if (!/^image\//i.test(contentType)) {
+    throw new Error(
+      `Vision describe supports image attachments only; "${filename}" is ${contentType}.`
+    );
+  }
+  const b64 = buffer.toString("base64");
+  const model = CONFIG.visionModel;
+  const url = `${CONFIG.visionApiBase}/chat/completions`;
+  const prompt =
+    typeof instructions === "string" && instructions.trim()
+      ? instructions.trim()
+      : "Describe this diagram or screenshot for a software engineer: list main systems, flows, and any readable labels.";
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${key}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model,
+      max_tokens: 1200,
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: prompt },
+            {
+              type: "image_url",
+              image_url: { url: `data:${contentType.split(";")[0]};base64,${b64}` },
+            },
+          ],
+        },
+      ],
+    }),
+  });
+  const raw = await res.text();
+  if (!res.ok) {
+    throw new Error(`Vision API HTTP ${res.status}: ${raw.slice(0, 800)}`);
+  }
+  let data;
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    throw new Error(`Vision API returned non-JSON: ${raw.slice(0, 400)}`);
+  }
+  const text = data?.choices?.[0]?.message?.content ?? "";
+  return {
+    pageId: String(pageId),
+    filename,
+    model,
+    description: text,
+  };
+}
+
 // --- Write (requires Confluence edit permission) ---
 
 /**
  * Create a new page. storageHtml is Confluence storage format (XHTML subset).
  */
 export async function createPage({ spaceKey, title, storageHtml, parentPageId }) {
+  enforceAllowlistOnSpaceKey(spaceKey);
   const payload = {
     type: "page",
     title,

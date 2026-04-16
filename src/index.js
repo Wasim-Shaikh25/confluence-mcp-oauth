@@ -22,10 +22,25 @@ import {
   fetchAttachmentByFilename,
   extractDiagramMacrosFromStorage,
   extractImageReferencesFromStorage,
+  listCqlPresetKeys,
+  searchWithPreset,
+  extractOutboundLinksFromStorage,
+  listDiagramLikeAttachments,
+  listChildPages,
+  listPageComments,
+  listPageLabels,
+  addPageLabel,
+  removePageLabel,
+  listPageVersions,
+  getPageStorageAtVersion,
+  diffPageStorageVersions,
+  getPagesBatch,
+  describeAttachmentWithVision,
+  getPageAncestors,
 } from "./confluence.js";
 
 const server = new Server(
-  { name: "confluence-oauth-mcp", version: "0.1.6" },
+  { name: "confluence-oauth-mcp", version: "0.1.7" },
   { capabilities: { tools: {} } }
 );
 
@@ -254,6 +269,223 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           },
         },
         required: ["pageId", "storageHtml"],
+      },
+    },
+    {
+      name: "confluence_get_ancestors",
+      description:
+        "Return page title, space, version, and ancestor pages (expand=ancestors).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          pageId: { type: "string", description: "Page content ID" },
+        },
+        required: ["pageId"],
+      },
+    },
+    {
+      name: "confluence_get_page_rendered",
+      description:
+        "Read a page including body.view (HTML) plus body.storage and metadata. Use for tables, panels, and layout closer to the Confluence UI.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          pageId: { type: "string", description: "Confluence content ID" },
+          expand: {
+            type: "string",
+            description:
+              'Optional expand (default: "body.view,body.storage,version,space").',
+          },
+        },
+        required: ["pageId"],
+      },
+    },
+    {
+      name: "confluence_list_child_pages",
+      description: "List direct child pages of a page (GET child/page).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          pageId: { type: "string", description: "Parent page content ID" },
+          limit: { type: "number", description: "Page size (default 25, max 100)" },
+          start: { type: "number", description: "Offset (default 0)" },
+          expand: { type: "string", description: 'e.g. "version,space"' },
+        },
+        required: ["pageId"],
+      },
+    },
+    {
+      name: "confluence_list_page_comments",
+      description: "List comments on a page (body.view expand when supported).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          pageId: { type: "string", description: "Page content ID" },
+          limit: { type: "number", description: "Max comments (default 25, max 100)" },
+          start: { type: "number", description: "Offset (default 0)" },
+        },
+        required: ["pageId"],
+      },
+    },
+    {
+      name: "confluence_list_labels",
+      description: "List labels on a page.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          pageId: { type: "string", description: "Page content ID" },
+        },
+        required: ["pageId"],
+      },
+    },
+    {
+      name: "confluence_add_label",
+      description: "Add a global label to a page (requires edit permission).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          pageId: { type: "string", description: "Page content ID" },
+          labelName: { type: "string", description: "Label text (no spaces restriction depends on site)" },
+        },
+        required: ["pageId", "labelName"],
+      },
+    },
+    {
+      name: "confluence_remove_label",
+      description: "Remove a label from a page (requires edit permission).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          pageId: { type: "string", description: "Page content ID" },
+          labelName: { type: "string", description: "Label to remove" },
+        },
+        required: ["pageId", "labelName"],
+      },
+    },
+    {
+      name: "confluence_list_versions",
+      description: "List historical versions of a page.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          pageId: { type: "string", description: "Page content ID" },
+          limit: { type: "number", description: "Max versions (default 50, max 200)" },
+        },
+        required: ["pageId"],
+      },
+    },
+    {
+      name: "confluence_get_page_version",
+      description: "Fetch page body at a specific historical version number.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          pageId: { type: "string", description: "Page content ID" },
+          version: { type: "number", description: "Version number from list_versions" },
+          expand: {
+            type: "string",
+            description: 'Optional expand (default: "body.storage,version,space")',
+          },
+        },
+        required: ["pageId", "version"],
+      },
+    },
+    {
+      name: "confluence_diff_page_versions",
+      description:
+        "Unified diff of body.storage between two version numbers (uses npm diff; patch may truncate).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          pageId: { type: "string", description: "Page content ID" },
+          versionA: { type: "number", description: "Older or first version" },
+          versionB: { type: "number", description: "Newer or second version" },
+        },
+        required: ["pageId", "versionA", "versionB"],
+      },
+    },
+    {
+      name: "confluence_get_pages_batch",
+      description:
+        "Fetch up to 20 pages in one call (sequential). Each result is ok+page or ok=false+error.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          pageIds: {
+            type: "array",
+            items: { type: "string" },
+            description: "Up to 20 content IDs",
+          },
+          expand: {
+            type: "string",
+            description: 'Optional expand (default: "body.storage,version,space")',
+          },
+        },
+        required: ["pageIds"],
+      },
+    },
+    {
+      name: "confluence_extract_page_links",
+      description:
+        "Parse body.storage for outbound ri:page and ri:url links (not backlinks).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          pageId: { type: "string", description: "Page content ID" },
+        },
+        required: ["pageId"],
+      },
+    },
+    {
+      name: "confluence_list_diagram_attachments",
+      description:
+        "List attachments whose filenames look like diagrams (drawio, gliffy, vsdx, plantuml, mermaid).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          pageId: { type: "string", description: "Page content ID" },
+        },
+        required: ["pageId"],
+      },
+    },
+    {
+      name: "confluence_list_cql_presets",
+      description: "List built-in CQL preset keys and descriptions (use confluence_search_preset to run one).",
+      inputSchema: { type: "object", properties: {} },
+    },
+    {
+      name: "confluence_search_preset",
+      description:
+        "Run confluence_search using a named preset (recent_pages, pages_in_space, stale_pages_90d, pages_i_contributed).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          preset: { type: "string", description: "Preset key from list_cql_presets" },
+          spaceKey: {
+            type: "string",
+            description: "Required for pages_in_space; optional filter for stale_pages_90d",
+          },
+          limit: { type: "number", description: "Result limit (default 25)" },
+          start: { type: "number", description: "Offset (default 0)" },
+        },
+        required: ["preset"],
+      },
+    },
+    {
+      name: "confluence_describe_attachment",
+      description:
+        "Optional vision summary for an image attachment (OpenAI-compatible API). Set CONFLUENCE_VISION_API_KEY or OPENAI_API_KEY.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          pageId: { type: "string", description: "Page content ID" },
+          filename: { type: "string", description: "Attachment filename" },
+          instructions: {
+            type: "string",
+            description: "Optional prompt for the vision model",
+          },
+        },
+        required: ["pageId", "filename"],
       },
     },
   ],
@@ -494,6 +726,204 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           ? args.versionMessage
           : "Updated via MCP",
     });
+    return {
+      content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
+    };
+  }
+
+  if (name === "confluence_get_ancestors") {
+    const pageId = args.pageId;
+    if (!pageId) throw new Error("pageId is required");
+    const data = await getPageAncestors(String(pageId));
+    return {
+      content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
+    };
+  }
+
+  if (name === "confluence_get_page_rendered") {
+    const pageId = args.pageId;
+    if (!pageId) throw new Error("pageId is required");
+    const expand =
+      typeof args.expand === "string"
+        ? args.expand
+        : "body.view,body.storage,version,space";
+    const data = await getPage(String(pageId), expand);
+    return {
+      content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
+    };
+  }
+
+  if (name === "confluence_list_child_pages") {
+    const pageId = args.pageId;
+    if (!pageId) throw new Error("pageId is required");
+    const limit = typeof args.limit === "number" ? args.limit : 25;
+    const start = typeof args.start === "number" ? args.start : 0;
+    const expand = typeof args.expand === "string" ? args.expand : "version";
+    const data = await listChildPages(String(pageId), limit, start, expand);
+    return {
+      content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
+    };
+  }
+
+  if (name === "confluence_list_page_comments") {
+    const pageId = args.pageId;
+    if (!pageId) throw new Error("pageId is required");
+    const limit = typeof args.limit === "number" ? args.limit : 25;
+    const start = typeof args.start === "number" ? args.start : 0;
+    const data = await listPageComments(String(pageId), limit, start);
+    return {
+      content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
+    };
+  }
+
+  if (name === "confluence_list_labels") {
+    const pageId = args.pageId;
+    if (!pageId) throw new Error("pageId is required");
+    const data = await listPageLabels(String(pageId));
+    return {
+      content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
+    };
+  }
+
+  if (name === "confluence_add_label") {
+    const pageId = args.pageId;
+    if (!pageId) throw new Error("pageId is required");
+    const data = await addPageLabel(String(pageId), String(args.labelName));
+    return {
+      content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
+    };
+  }
+
+  if (name === "confluence_remove_label") {
+    const pageId = args.pageId;
+    if (!pageId) throw new Error("pageId is required");
+    const data = await removePageLabel(String(pageId), String(args.labelName));
+    return {
+      content: [{ type: "text", text: JSON.stringify(data ?? { ok: true }, null, 2) }],
+    };
+  }
+
+  if (name === "confluence_list_versions") {
+    const pageId = args.pageId;
+    if (!pageId) throw new Error("pageId is required");
+    const limit = typeof args.limit === "number" ? args.limit : 50;
+    const data = await listPageVersions(String(pageId), limit);
+    return {
+      content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
+    };
+  }
+
+  if (name === "confluence_get_page_version") {
+    const pageId = args.pageId;
+    const version = args.version;
+    if (!pageId || version == null) throw new Error("pageId and version are required");
+    const expand =
+      typeof args.expand === "string"
+        ? args.expand
+        : "body.storage,version,space";
+    const data = await getPageStorageAtVersion(String(pageId), Number(version), expand);
+    return {
+      content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
+    };
+  }
+
+  if (name === "confluence_diff_page_versions") {
+    const pageId = args.pageId;
+    if (!pageId || args.versionA == null || args.versionB == null) {
+      throw new Error("pageId, versionA, and versionB are required");
+    }
+    const data = await diffPageStorageVersions(
+      String(pageId),
+      Number(args.versionA),
+      Number(args.versionB)
+    );
+    return {
+      content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
+    };
+  }
+
+  if (name === "confluence_get_pages_batch") {
+    const pageIds = args.pageIds;
+    if (!Array.isArray(pageIds) || pageIds.length === 0) {
+      throw new Error("pageIds array is required");
+    }
+    const expand =
+      typeof args.expand === "string"
+        ? args.expand
+        : "body.storage,version,space";
+    const data = await getPagesBatch(pageIds.map(String), expand);
+    return {
+      content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
+    };
+  }
+
+  if (name === "confluence_extract_page_links") {
+    const pageId = args.pageId;
+    if (!pageId) throw new Error("pageId is required");
+    const page = await getPage(String(pageId), "body.storage,space,title");
+    const storage = page?.body?.storage?.value ?? "";
+    const links = extractOutboundLinksFromStorage(storage);
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify(
+            {
+              pageId: String(pageId),
+              title: page?.title,
+              linkCount: links.length,
+              links,
+            },
+            null,
+            2
+          ),
+        },
+      ],
+    };
+  }
+
+  if (name === "confluence_list_diagram_attachments") {
+    const pageId = args.pageId;
+    if (!pageId) throw new Error("pageId is required");
+    const data = await listDiagramLikeAttachments(String(pageId));
+    return {
+      content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
+    };
+  }
+
+  if (name === "confluence_list_cql_presets") {
+    const data = listCqlPresetKeys();
+    return {
+      content: [{ type: "text", text: JSON.stringify({ presets: data }, null, 2) }],
+    };
+  }
+
+  if (name === "confluence_search_preset") {
+    const preset = String(args.preset || "");
+    if (!preset) throw new Error("preset is required");
+    const spaceKey =
+      typeof args.spaceKey === "string" && args.spaceKey.trim()
+        ? args.spaceKey.trim()
+        : undefined;
+    const limit = typeof args.limit === "number" ? args.limit : 25;
+    const start = typeof args.start === "number" ? args.start : 0;
+    const data = await searchWithPreset(preset, { spaceKey, limit, start });
+    return {
+      content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
+    };
+  }
+
+  if (name === "confluence_describe_attachment") {
+    const pageId = args.pageId;
+    const filename = args.filename;
+    if (!pageId || !filename) throw new Error("pageId and filename are required");
+    const instructions =
+      typeof args.instructions === "string" ? args.instructions : undefined;
+    const data = await describeAttachmentWithVision(
+      String(pageId),
+      String(filename),
+      instructions
+    );
     return {
       content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
     };

@@ -113,4 +113,25 @@ export const CONFIG = {
     const n = Number.isFinite(raw) ? raw : 5_242_880;
     return Math.min(50 * 1024 * 1024, Math.max(256 * 1024, n));
   })(),
+  /** Comma-separated space keys (case-insensitive). When non-empty, page reads/writes must target one of these spaces. */
+  allowedSpaceKeys: (() => {
+    const raw = process.env.CONFLUENCE_ALLOWED_SPACE_KEYS?.trim();
+    if (!raw) return null;
+    const set = new Set(
+      raw
+        .split(",")
+        .map((s) => s.trim().toUpperCase())
+        .filter(Boolean)
+    );
+    return set.size ? set : null;
+  })(),
+  httpMaxRetries: Math.min(8, Math.max(0, parseInt(process.env.CONFLUENCE_HTTP_MAX_RETRIES || "3", 10) || 3)),
+  httpRetryBaseMs: Math.min(30_000, Math.max(100, parseInt(process.env.CONFLUENCE_HTTP_RETRY_MS || "600", 10) || 600)),
+  /** Optional: OpenAI-compatible key for confluence_describe_attachment (vision). */
+  visionApiKey:
+    (typeof process.env.CONFLUENCE_VISION_API_KEY === "string" && process.env.CONFLUENCE_VISION_API_KEY.trim()) ||
+    (typeof process.env.OPENAI_API_KEY === "string" && process.env.OPENAI_API_KEY.trim()) ||
+    "",
+  visionModel: (process.env.CONFLUENCE_VISION_MODEL || "gpt-4o-mini").trim(),
+  visionApiBase: (process.env.CONFLUENCE_VISION_API_BASE || "https://api.openai.com/v1").replace(/\/$/, ""),
 };
