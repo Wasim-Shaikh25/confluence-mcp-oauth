@@ -25,7 +25,7 @@ import {
 } from "./confluence.js";
 
 const server = new Server(
-  { name: "confluence-oauth-mcp", version: "0.1.5" },
+  { name: "confluence-oauth-mcp", version: "0.1.6" },
   { capabilities: { tools: {} } }
 );
 
