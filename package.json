@@ -1,6 +1,6 @@
 {
   "name": "confluence-sso-mcp",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "Model Context Protocol (MCP) server for Atlassian Confluence: PAT or browser SSO cookies for REST API access—works with any reachable site you configure (Cloud or Data Center).",
   "keywords": [
     "mcp",
@@ -53,14 +53,14 @@
     "login": "node scripts/confluence-login.mjs",
     "test": "node --import ./tests/setup-env.js --test tests/",
     "validate": "node scripts/validate.mjs",
-    "install-browser": "npx playwright install chromium",
+    "install-browser": "node ./node_modules/playwright/cli.js install chromium",
     "prepack": "node -e \"const fs=require('fs');const p='src/index.js';const t=fs.readFileSync(p,'utf8');if(!t.startsWith('#!/usr/bin/env node'))process.exit(1);\"",
     "prepublishOnly": "node scripts/verify-pack-includes-src.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.0.0",
-    "diff": "^5.2.0",
-    "node-fetch": "^3.3.2",
-    "playwright": "^1.43.0"
+    "diff": "5.2.0",
+    "node-fetch": "3.3.2",
+    "playwright": "1.43.0"
   }
 }
