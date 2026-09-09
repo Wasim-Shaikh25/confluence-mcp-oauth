@@ -1,7 +1,7 @@
 {
   "name": "confluence-sso-mcp",
-  "version": "0.1.8",
-  "description": "Model Context Protocol (MCP) server for Atlassian Confluence: PAT or browser SSO cookies for REST API access—works with any reachable site you configure (Cloud or Data Center).",
+  "version": "0.2.0",
+  "description": "Model Context Protocol (MCP) server for Atlassian Confluence: browser SSO cookies for REST API access (with background session keep-alive and stale-cookie cleanup)—works with any reachable site you configure (Cloud or Data Center).",
   "keywords": [
     "mcp",
     "model-context-protocol",
@@ -25,6 +25,7 @@
     "src/sso-login-messages.js",
     "src/confluence-paths.js",
     "src/cookie-lock.js",
+    "src/cookie-refresh.js",
     "src/session-path.js",
     "tests/confluence-features.test.js",
     "tests/confluence-extras.test.js",
@@ -32,6 +33,7 @@
     "src/mcp-server-discovery.js",
     "scripts/confluence-login.mjs",
     "README.md",
+    "CHANGELOG.md",
     ".env.example"
   ],
   "repository": {

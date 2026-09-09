@@ -7,6 +7,7 @@ import {
   CallToolRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { loginWithSSO, loginToolResultText } from "./auth.js";
+import { startCookieKeepAlive } from "./cookie-refresh.js";
 import {
   searchContent,
   getPage,
@@ -49,7 +50,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: "confluence_login",
       description:
-        "SSO login in a browser (Playwright); saves cookies for REST. If IdP redirects or automation block a session, use CONFLUENCE_PAT + PREFER_SSO_COOKIES=0 in mcp.json or delete the reported cookie file. Optional when PAT is configured and preferred.",
+        "SSO login in a browser (Playwright); saves cookies for REST. Auth is SSO-cookie only. If IdP redirects or automation block a session, delete the reported cookie file and retry, completing SSO fully in the opened window.",
       inputSchema: { type: "object", properties: {} },
     },
     {
@@ -187,7 +188,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: "confluence_fetch_attachment",
       description:
-        "Download a page attachment by filename (PNG/JPEG/etc.). Returns an image for image/* types, otherwise base64 text. Auth: CONFLUENCE_PAT first, then SSO cookies.",
+        "Download a page attachment by filename (PNG/JPEG/etc.). Returns an image for image/* types, otherwise base64 text. Auth: SSO cookies.",
       inputSchema: {
         type: "object",
         properties: {
@@ -934,6 +935,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
+
+// Keep the Confluence session warm and warn/clean up if the SSO cookie goes stale.
+startCookieKeepAlive();
 
 process.on("SIGINT", async () => {
   await transport.close();

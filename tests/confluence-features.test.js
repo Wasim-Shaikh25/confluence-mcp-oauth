@@ -55,16 +55,17 @@ describe("confluence-paths", () => {
 });
 
 describe("sso-login-messages", () => {
-  it("buildLoginToolResultText includes PAT and cookie path", () => {
+  it("buildLoginToolResultText includes the cookie path and count (SSO-only)", () => {
     const t = buildLoginToolResultText({
-      patEnvKey: "CONFLUENCE_PAT",
       cookieFile: "C:/app/cookies/session-x.json",
       cookieCount: 2,
       sessionProbeOk: true,
     });
-    assert.ok(t.includes("CONFLUENCE_PAT"));
-    assert.ok(t.includes("PREFER_SSO_COOKIES=0"));
     assert.ok(t.includes("session-x.json"));
+    assert.ok(t.includes("Cookies captured: 2"));
+    // SSO-only: no token guidance should remain.
+    assert.ok(!t.includes("CONFLUENCE_PAT"));
+    assert.ok(!t.includes("PREFER_SSO_COOKIES"));
   });
 });
 

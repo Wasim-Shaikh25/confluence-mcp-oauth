@@ -46,3 +46,25 @@ export function withCookieFileLockSync(filePath, fn) {
   }
   throw new Error(`Cookie file lock timeout after ${MAX_WAIT_MS}ms: ${filePath}`);
 }
+
+/**
+ * Delete the cookie file (and any stale lock) under the file lock. Used by the
+ * keep-alive when the session is confirmed dead after repeated auth failures.
+ * Safe: no-op if the file is already gone.
+ * @param {string} filePath
+ * @returns {boolean} true if a file was deleted
+ */
+export function deleteCookieFileSync(filePath) {
+  return withCookieFileLockSync(filePath, () => {
+    let deleted = false;
+    try {
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+        deleted = true;
+      }
+    } catch {
+      // ignore — best-effort cleanup
+    }
+    return deleted;
+  });
+}

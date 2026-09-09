@@ -67,60 +67,28 @@ function authHeadersForCookie() {
   return { Cookie: cookie };
 }
 
-function authHeadersForPat() {
-  const pat = CONFIG.getPatToken();
-  if (!pat) return null;
-  return { Authorization: `Bearer ${pat}` };
-}
-
-function shouldRetryWithCookie(status) {
-  return status === 401 || status === 403;
-}
-
 /**
- * Default: if SSO cookies exist on disk, use **only** cookies (PAT is not sent). If cookies return 401/403, fail with a clear message (re-login or PREFER_SSO_COOKIES=0 + PAT).
- * If PREFER_SSO_COOKIES=0: PAT first, then cookies on 401/403 (legacy).
- * If no cookies: PAT if set, else error.
+ * Cookie-only auth. Complete confluence_login once to save SSO cookies.
+ * If cookies return 401/403, fail with a clear message to re-login.
  */
 async function fetchWithAuth(url, init = {}) {
-  const patHeaders = authHeadersForPat();
   const cookieHeaders = authHeadersForCookie();
-
-  const merge = (extra) => ({
+  if (!cookieHeaders) {
+    throw new Error(
+      "Not authenticated. Run the confluence_login tool once to complete SSO and save cookies."
+    );
+  }
+  const res = await fetch(url, {
     ...init,
-    headers: {
-      ...init.headers,
-      ...extra,
-    },
+    headers: { ...init.headers, ...cookieHeaders },
   });
-
-  if (CONFIG.preferSsoCookies && cookieHeaders) {
-    const res = await fetch(url, merge(cookieHeaders));
-    if (res.ok) return res;
-    if (shouldRetryWithCookie(res.status)) {
-      const text = await res.text();
-      throw new Error(
-        `Confluence HTTP ${res.status}: ${text.slice(0, 400)} SSO session expired, rejected, or never captured (browser automation/IdP). Run confluence_login again, or set CONFLUENCE_PAT + PREFER_SSO_COOKIES=0 in mcp.json, or delete the cookie file at ${CONFIG.COOKIE_FILE} to use PAT.`
-      );
-    }
-    return res;
+  if (res.status === 401 || res.status === 403) {
+    const text = await res.text();
+    throw new Error(
+      `Confluence HTTP ${res.status}: ${text.slice(0, 400)} SSO session expired, rejected, or never captured (browser automation/IdP). Run confluence_login again, or delete the cookie file at ${CONFIG.COOKIE_FILE} and re-login.`
+    );
   }
-
-  if (patHeaders) {
-    const res = await fetch(url, merge(patHeaders));
-    if (res.ok || !cookieHeaders || !shouldRetryWithCookie(res.status)) {
-      return res;
-    }
-    return fetch(url, merge(cookieHeaders));
-  }
-
-  if (cookieHeaders) {
-    return fetch(url, merge(cookieHeaders));
-  }
-
-  throw new Error(
-    "Not authenticated. Set CONFLUENCE_PAT (or CONFLUENCE_API_TOKEN), or run confluence_login once to save cookies."
-  );
+  return res;
 }
 
 function sleep(ms) {
@@ -150,7 +118,7 @@ async function fetchWithRetry(url, init) {
 
 function hintForConfluenceStatus(status) {
   if (status === 401) {
-    return " Unauthorized: SSO session expired, missing, or unusable — run confluence_login, or set CONFLUENCE_PAT and PREFER_SSO_COOKIES=0 (stale cookie file at cookies/session-*.json can block PAT until deleted).";
+    return " Unauthorized: SSO session expired, missing, or unusable — run confluence_login again to refresh your cookies.";
   }
   if (status === 403) {
     return " Forbidden: you are signed in but lack permission for this space or action (e.g. create page). Try another space or request access.";
@@ -405,6 +373,19 @@ export async function listAttachments(pageId, limit = 50, start = 0) {
   return requestJson(
     `/rest/api/content/${id}/child/attachment?limit=${lim}&start=${st}&expand=${expand}`
   );
+}
+
+/**
+ * Download an attachment by its attachment ID via the REST child endpoint
+ * (/rest/api/content/{pageId}/child/attachment/{attachmentId}/download). More precise
+ * than by-filename when a page has duplicate attachment names.
+ * @param {string} pageId
+ * @param {string} attachmentId
+ */
+export async function downloadAttachmentByRest(pageId, attachmentId) {
+  const pid = encodeURIComponent(pageId);
+  const aid = encodeURIComponent(attachmentId);
+  return requestBinary(`/rest/api/content/${pid}/child/attachment/${aid}/download`);
 }
 
 /**
