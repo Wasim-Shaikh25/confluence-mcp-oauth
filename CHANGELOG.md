@@ -2,6 +2,20 @@
 
 All notable changes to this project are documented here.
 
+## 0.2.1
+
+### Changed
+
+- **Keep-alive is more aggressive and self-healing.** The background session
+  keep-alive now pings **immediately on start** (was a ~3s delay) and defaults to a
+  **120s** interval (was 240s). The loop is self-scheduling: after a **successful**
+  ping it waits the full interval, but after a **failed** ping it retries quickly
+  (default 15s, `CONFLUENCE_KEEPALIVE_RETRY_SECONDS`) instead of waiting a full
+  interval, so a transient blip cannot let the SSO session quietly age out while the
+  server runs. New env var `CONFLUENCE_KEEPALIVE_RETRY_SECONDS` (default 15).
+  - Unchanged limitation: SSO cookies still cannot be renewed headlessly. When the
+    IdP's absolute session lifetime is reached, run `confluence_login` again.
+
 ## 0.2.0
 
 ### Breaking changes
